@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
-import { getTreeBySlug } from '../data/treeRepo'
+import { getTreeBySlug, ensureSeed } from '../data/treeRepo'
 import { addGap, createWork } from '../data/userRepo'
 import { db } from '../data/db'
 import { check, getNode, pick, start } from '../domain/treeEngine'
@@ -33,9 +33,17 @@ export function RunScreen() {
 
   useEffect(() => {
     if (!slug) return
-    getTreeBySlug(slug).then((t) => {
+    getTreeBySlug(slug).then(async (t) => {
       if (!t) {
-        setError('Дерево не найдено')
+        // Первый запуск: сид мог ещё не записаться — пробуем ещё раз.
+        await ensureSeed()
+        const retry = await getTreeBySlug(slug)
+        if (!retry) {
+          setError('Дерево не найдено')
+          return
+        }
+        setTree(retry)
+        if (!run || run.treeId !== retry.id) setRun(start(retry))
         return
       }
       setTree(t)

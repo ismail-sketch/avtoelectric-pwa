@@ -21,8 +21,7 @@ export function HomeScreen() {
     ensureSeed()
   }, [])
 
-  return (
-    <Screen>
+  return (    <Screen>
       <header className="mb-5 flex items-start justify-between pt-1">
         <div>
           <p className="text-sm text-muted">Помощник</p>

@@ -4,6 +4,7 @@ import { registerSW } from 'virtual:pwa-register'
 import './index.css'
 import App from './App.tsx'
 import { requestPersistence } from './data/db.ts'
+import { ensureSeed } from './data/treeRepo.ts'
 
 // Обновление не перезагружает страницу посреди диагностики — только по кнопке.
 registerSW({
@@ -23,8 +24,14 @@ registerSW({
 
 requestPersistence().catch(() => {})
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App />
-  </StrictMode>,
-)
+// Деревья по умолчанию должны быть до первого рендера:
+// иначе прямой заход на /#/run/no-start не найдёт дерево.
+ensureSeed()
+  .catch(() => {})
+  .finally(() => {
+    createRoot(document.getElementById('root')!).render(
+      <StrictMode>
+        <App />
+      </StrictMode>,
+    )
+  })
