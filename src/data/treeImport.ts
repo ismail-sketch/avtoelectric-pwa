@@ -11,15 +11,31 @@ const REQUIRED = ['id', 'type', 'text'] as const
 
 export function parseOptions(raw?: string): TreeOption[] {
   if (!raw?.trim()) return []
+  // Разделитель вариантов — ';' или '|'. Внутри варианта — '=>' или '→'.
   return raw
-    .split(';')
+    .split(/[;|]/)
     .map((chunk) => chunk.trim())
     .filter(Boolean)
     .map((chunk) => {
-      const [label, next] = chunk.split('=>').map((s) => s.trim())
+      const [label, next] = chunk.split(/=>|→/).map((s) => s.trim())
       if (!label || !next) throw new Error(`Не разобрал вариант: "${chunk}". Нужно "Текст=>id"`)
       return { label, next }
     })
+}
+
+/** Excel в русской Windows сохраняет CSV в windows-1251. Определяем кодировку сами. */
+export function decodeCsv(buffer: ArrayBuffer): string {
+  const bytes = new Uint8Array(buffer)
+  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) {
+    return new TextDecoder('utf-8').decode(bytes.subarray(3))
+  }
+  const utf8 = new TextDecoder('utf-8').decode(bytes)
+  if (!utf8.includes('\uFFFD')) return utf8.replace(/^\uFEFF/, '')
+  try {
+    return new TextDecoder('windows-1251').decode(bytes)
+  } catch {
+    return utf8
+  }
 }
 
 export function treeFromCsv(csv: string, meta: { slug: string; title: string; rootId?: NodeId }): TreeDoc {
@@ -28,8 +44,15 @@ export function treeFromCsv(csv: string, meta: { slug: string; title: string; ro
     skipEmptyLines: true,
     transformHeader: (h) => h.trim().toLowerCase(),
   })
-  if (parsed.errors.length) {
-    throw new Error(parsed.errors.map((e) => `строка ${e.row}: ${e.message}`).join('\n'))
+  // TooFewFields — это просто пустые необязательные колонки в конце строки, это норма.
+  // TooManyFields — настоящая ошибка: скорее всего запятая в тексте без кавычек.
+  const fatal = parsed.errors.filter((e) => e.code !== 'TooFewFields')
+  if (fatal.length) {
+    throw new Error(
+      fatal
+        .map((e) => `строка ${(e.row ?? 0) + 2}: ${e.message}`)
+        .join('\n'),
+    )
   }
 
   const rows = parsed.data
@@ -95,8 +118,11 @@ export function treeFromCsv(csv: string, meta: { slug: string; title: string; ro
 }
 
 export const CSV_TEMPLATE = `id,type,text,options,tool,points,norm,ifBad,stop,next,badNext,note
-q1,question,Стартер крутит?,Да=>c1; Нет=>c2,,,,,,,,
-c1,check,Напряжение АКБ в покое,,мультиметр,клеммы,12.6-12.8 В,зарядить,,o1,,отстой 2-4 ч
-c2,check,Масса двигателя,,мультиметр,блок-минус,<=0.2 В,чистить,,o1,,
-o1,outcome,Готово,,,,,,,,,
+q1,question,Что не работает?,Ближний свет=>q2; Габариты=>q2; Поворотники=>q2,,,,,,,,
+q2,question,Обе стороны или одна?,Обе=>c1; Одна=>c2,,,,,,,,
+c1,check,Предохранитель цепи,,мультиметр или глаза,блок предохранителей,целый,заменить предохранитель,,c2,o2,
+c2,check,Напряжение на разъёме лампы при включении,,мультиметр DC,разъём лампы,не ниже 12 В,искать разрыв по цепи,,c3,o2,
+c3,check,Масса на корпусе фары,,мультиметр DC,кузов и минус АКБ,"не более 0,2 В",чистить точку массы,,o1,o2,
+o1,outcome,Цепь исправна — смотреть лампу и патрон,,,,,,,,,Проверить лампу на просвет и контакты патрона
+o2,outcome,Разрыв в цепи — звонить по схеме от предохранителя к потребителю,,,,,,,,,"Массу и разъёмы проверять до замены деталей"
 `

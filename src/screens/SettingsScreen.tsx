@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { db, requestPersistence } from '../data/db'
-import { CSV_TEMPLATE, treeFromCsv } from '../data/treeImport'
+import { CSV_TEMPLATE, decodeCsv, treeFromCsv } from '../data/treeImport'
 import { downloadBlob, exportBackup, importBackup } from '../data/backup'
 import { saveTree } from '../data/treeRepo'
 import { validateTree } from '../domain/treeEngine'
@@ -26,7 +26,7 @@ export function SettingsScreen() {
   async function onCsv(file: File) {
     setImporting(true)
     try {
-      const csv = await file.text()
+      const csv = decodeCsv(await file.arrayBuffer())
       const title = file.name.replace(/\.csv$/i, '')
       const slug = title.toLowerCase().replace(/[^a-z0-9а-я]+/gi, '-')
       const doc = treeFromCsv(csv, { slug, title })
