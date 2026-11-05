@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react'
 import {
+  ampsForSection,
+  chooseWire,
   leakageDrain,
-  recommendedFuse,
   recommendedSection,
   requiredSection,
   socFromVoltage,
@@ -124,19 +125,35 @@ function MaterialSelect({ value, onChange }: { value: Material; onChange: (m: Ma
   )
 }
 
+/** Нормы падения по типу цепи, В (двухпроводная линия). */
+const DROP_NORMS = [
+  { id: 'power', label: 'Силовая / стартер', max: 0.5 },
+  { id: 'light', label: 'Освещение, приборы', max: 0.3 },
+  { id: 'signal', label: 'Сигнал, датчики', max: 0.1 },
+] as const
+
+type DropNorm = (typeof DROP_NORMS)[number]['id']
+
 function DropCalc() {
   const [currentA, setCurrentA] = useState(8)
   const [lengthM, setLengthM] = useState(4)
   const [section, setSection] = useState(1.5)
   const [material, setMaterial] = useState<Material>('copper')
-  const [supplyV, setSupplyV] = useState(12.6)
+  const [norm, setNorm] = useState<DropNorm>('power')
 
-  const valid = isNum(currentA) && isNum(lengthM) && isNum(section) && isNum(supplyV) && section > 0
+  const valid = isNum(currentA) && isNum(lengthM) && isNum(section) && section > 0
+  const allowedDropV = DROP_NORMS.find((n) => n.id === norm)!.max
 
   const r = valid
-    ? voltageDrop({ currentA, lengthM, sectionMm2: section, material }, supplyV)
-    : { dropV: Number.NaN, voltageAtLoad: Number.NaN, dropPercent: Number.NaN, level: 'ok' as const }
-  const need = valid ? requiredSection({ currentA, lengthM, material, maxDropV: supplyV * 0.04 }) : Number.NaN
+    ? voltageDrop({ currentA, lengthM, sectionMm2: section, material, allowedDropV })
+    : {
+        dropV: Number.NaN,
+        voltageAtLoad: Number.NaN,
+        dropPercent: Number.NaN,
+        allowedDropV,
+        level: 'ok' as const,
+      }
+  const need = valid ? requiredSection({ currentA, lengthM, material, maxDropV: allowedDropV }) : Number.NaN
   const rec = valid ? recommendedSection(currentA) : null
 
   const color = r.level === 'ok' ? 'text-ok' : r.level === 'warn' ? 'text-warn' : 'text-bad'
@@ -147,7 +164,16 @@ function DropCalc() {
         <Num label="Ток" value={currentA} onChange={setCurrentA} suffix="А" />
         <Num label="Длина линии" value={lengthM} onChange={setLengthM} suffix="м" />
         <Num label="Сечение" value={section} onChange={setSection} suffix="мм²" />
-        <Num label="Напряжение сети" value={supplyV} onChange={setSupplyV} suffix="В" />
+        <label className="block">
+          <span className="mb-1.5 block text-sm text-muted">Тип цепи</span>
+          <select className={inputClass} value={norm} onChange={(e) => setNorm(e.target.value as DropNorm)}>
+            {DROP_NORMS.map((n) => (
+              <option key={n.id} value={n.id}>
+                {n.label} — до {fmtShort(n.max)} В
+              </option>
+            ))}
+          </select>
+        </label>
         <MaterialSelect value={material} onChange={setMaterial} />
       </Card>
 
@@ -156,20 +182,23 @@ function DropCalc() {
         {valid ? (
           <>
             <div className="mt-1 text-sm text-muted">
-              На нагрузке {fmt(r.voltageAtLoad)} В · {fmt(r.dropPercent, 1)} %
+              На нагрузке {fmt(r.voltageAtLoad)} В · {fmt(r.dropPercent, 1)} % · норма{' '}
+              {fmt(r.allowedDropV)} В
             </div>
             <div className="mt-2 text-sm">
-              {r.level === 'ok' && 'Нормально'}
+              {r.level === 'ok' && 'В норме'}
               {r.level === 'warn' && 'Многовато: свет тускнеет, реле может не сработать'}
               {r.level === 'bad' && 'Плохо: нужен толще провод'}
             </div>
             {need <= section ? (
               <p className="mt-2 text-xs text-muted">
-                Для ≤4 % хватает {fmt(need)} мм²{rec ? ` · по току ближайшее ${fmt(rec.section)} мм²` : ''}
+                Под норму хватает {fmt(need)} мм²
+                {rec ? ` · по току ближайшее ${fmt(rec.section)} мм²` : ''}
               </p>
             ) : (
               <p className="mt-2 text-xs text-warn">
-                Для ≤4 % нужно {fmt(need)} мм²{rec ? `, по току — ${fmt(rec.section)} мм²` : ''}
+                Под норму нужно {fmt(need)} мм²
+                {rec ? `, по току — ${fmt(rec.section)} мм²` : ''}
               </p>
             )}
           </>
@@ -190,10 +219,7 @@ function SectionCalc() {
   const valid =
     isNum(currentA) && isNum(lengthM) && isNum(maxDropV) && maxDropV > 0 && currentA >= 0 && lengthM >= 0
 
-  const need = valid ? requiredSection({ currentA, lengthM, material, maxDropV }) : Number.NaN
-  const rec = valid ? recommendedSection(currentA) : null
-  const choose = valid ? Math.max(need, rec?.section ?? 0) : Number.NaN
-  const fuse = valid ? recommendedFuse(currentA, rec?.amps ?? currentA) : Number.NaN
+  const w = valid ? chooseWire({ currentA, lengthM, material, maxDropV }) : null
 
   return (
     <div className="flex flex-col gap-3">
@@ -205,18 +231,30 @@ function SectionCalc() {
       </Card>
 
       <Card>
-        {valid ? (
+        {w ? (
           <>
             <div className="text-sm text-muted">По падению напряжения</div>
-            <div className="text-3xl font-semibold text-accent">{fmt(need)} мм²</div>
+            <div className="text-3xl font-semibold text-accent">{fmt(w.byDrop)} мм²</div>
             <div className="mt-3 text-sm text-muted">По нагреву провода</div>
-            <div className="text-xl font-medium">{rec ? `${fmtShort(rec.section)} мм²` : 'больше 50 мм²'}</div>
+            <div className="text-xl font-medium">
+              {w.heatStandard ? `${fmtShort(w.heatStandard)} мм²` : 'ток выше таблицы'}
+            </div>
             <div className="mt-3 rounded-lg bg-surface-2 p-3 text-sm">
-              Брать <span className="font-semibold text-accent">{fmtShort(choose)} мм²</span>, предохранитель{' '}
-              <span className="font-semibold text-accent">{isNum(fuse) ? `${fmtShort(fuse)} А` : '—'}</span>
+              {w.section != null ? (
+                <>
+                  Брать <span className="font-semibold text-accent">{fmtShort(w.section)} мм²</span> (стандартное),
+                  держит {fmtShort(ampsForSection(w.section))} А, предохранитель{' '}
+                  <span className="font-semibold text-accent">
+                    {w.fuse != null ? `${fmtShort(w.fuse)} А` : 'провод не держит'}
+                  </span>
+                </>
+              ) : (
+                'Расчётное сечение больше 50 мм² — раздели цепь или сократи длину'
+              )}
             </div>
             <p className="mt-2 text-xs text-muted">
-              Ориентир для одиночного медного провода. Учти способ прокладки и температуру.
+              Решает большее из двух: падение на длине или нагрев. Сечение округлено вверх до стандартного.
+              Учти способ прокладки, температуру и жгут.
             </p>
           </>
         ) : (
@@ -253,11 +291,11 @@ function LeakCalc() {
             <div className="mt-1 text-sm text-muted">Норма: 20–50 мА (до 80 мА у некоторых авто)</div>
             <div className="mt-3 grid grid-cols-2 gap-3 text-sm">
               <div>
-                <div className="text-muted">До 50 % заряда</div>
+                <div className="text-muted">До 50 % (безопасно)</div>
                 <div className="font-medium">{days(r.hoursToHalf)} дн</div>
               </div>
               <div>
-                <div className="text-muted">Почти в ноль</div>
+                <div className="text-muted">До глубокого разряда</div>
                 <div className="font-medium">{days(r.hoursToDead)} дн</div>
               </div>
             </div>
@@ -287,9 +325,10 @@ function SocCalc() {
       </Card>
       <Card>
         <div className={`text-3xl font-semibold ${color}`}>{valid ? `${soc} %` : '— %'}</div>
-        <div className="mt-1 text-sm text-muted">Оценка заряда по НРЦ</div>
+        <div className="mt-1 text-sm text-muted">Оценка заряда по НРЦ (свинцово-кислотный)</div>
         <p className="mt-3 text-xs text-muted">
-          Мерить через 2–4 часа после нагрузки или заряда. На морозе и сразу после пуска значение врёт.
+          Мерить через 2–4 часа после нагрузки или заряда. На морозе и сразу после пуска значение врёт. Для AGM/EFB
+          кривая немного другая — значение ориентировочное.
         </p>
       </Card>
     </div>

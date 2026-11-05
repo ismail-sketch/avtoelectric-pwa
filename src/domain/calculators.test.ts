@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest'
-import { voltageDrop, requiredSection, recommendedSection, recommendedFuse, leakageDrain, socFromVoltage } from './calculators'
+import {
+  voltageDrop,
+  requiredSection,
+  recommendedSection,
+  recommendedFuse,
+  leakageDrain,
+  socFromVoltage,
+  standardSection,
+  ampsForSection,
+  chooseWire,
+} from './calculators'
 
 describe('voltageDrop', () => {
   it('падение на меди: 8 А, 4 м, 1.5 мм²', () => {
@@ -18,6 +28,20 @@ describe('voltageDrop', () => {
     const r = voltageDrop({ currentA: 10, lengthM: 10, sectionMm2: 0.5, material: 'copper' })
     expect(r.level).toBe('bad')
   })
+
+  it('норма по цепи освещения 0,3 В строже, чем 4 %', () => {
+    // 0,4 В — это 3,2 % (прошло бы по процентам), но больше 0,3 В
+    const r = voltageDrop(
+      { currentA: 8, lengthM: 2, sectionMm2: 1.5, material: 'copper', allowedDropV: 0.3 },
+    )
+    expect(r.dropV).toBeCloseTo(0.373, 2)
+    expect(r.level).toBe('warn')
+  })
+
+  it('без allowedDropV норма — 4 % от сети', () => {
+    const r = voltageDrop({ currentA: 8, lengthM: 4, sectionMm2: 1.5, material: 'copper' })
+    expect(r.allowedDropV).toBeCloseTo(0.504, 3)
+  })
 })
 
 describe('requiredSection', () => {
@@ -27,8 +51,26 @@ describe('requiredSection', () => {
   })
 })
 
+describe('standardSection', () => {
+  it('2,24 → 2,5 мм²', () => {
+    expect(standardSection(2.24)).toBe(2.5)
+  })
+  it('ровно 2,5 → 2,5 мм²', () => {
+    expect(standardSection(2.5)).toBe(2.5)
+  })
+  it('больше 50 → null', () => {
+    expect(standardSection(60)).toBeNull()
+  })
+})
+
+describe('ampsForSection', () => {
+  it('2,5 мм² → 25 А', () => {
+    expect(ampsForSection(2.5)).toBe(25)
+  })
+})
+
 describe('recommendedSection', () => {
-  it('25 А → 2.5 мм² (кратковременно) или 4 мм² по запасу', () => {
+  it('24 А → 2.5 мм²', () => {
     const r = recommendedSection(24)
     expect(r?.section).toBe(2.5)
   })
@@ -40,6 +82,27 @@ describe('recommendedFuse', () => {
   })
   it('ограничивается током провода', () => {
     expect(recommendedFuse(20, 18)).toBe(15)
+  })
+  it('слаботочка 2 А → 2 А, а не 5 А', () => {
+    expect(recommendedFuse(2, 6)).toBe(2)
+  })
+  it('провод не держит даже 1 А → null', () => {
+    expect(recommendedFuse(0.5, 0.8)).toBeNull()
+  })
+})
+
+describe('chooseWire', () => {
+  it('длинная линия: решает падение, а не нагрев', () => {
+    // 20 А, 8 м, медь, ≤0,5 В → 2*0.0175*8*20/0.5 = 11,2 мм² → 16 мм²
+    const w = chooseWire({ currentA: 20, lengthM: 8, material: 'copper', maxDropV: 0.5 })
+    expect(w.byDrop).toBeCloseTo(11.2, 1)
+    expect(w.section).toBe(16)
+    expect(w.fuse).toBe(25)
+  })
+  it('короткая линия: решает нагрев', () => {
+    const w = chooseWire({ currentA: 40, lengthM: 1, material: 'copper', maxDropV: 0.5 })
+    expect(w.section).toBe(6)
+    expect(w.fuse).toBe(40)
   })
 })
 
