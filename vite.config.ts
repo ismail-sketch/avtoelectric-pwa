@@ -5,11 +5,16 @@ import { defineConfig } from 'vite'
 
 export default defineConfig({
   base: './',
+  // Старые сборки не должны копиться в dist: иначе service worker
+  // предзагружает десятки устаревших файлов и приложение пухнет.
+  build: {
+    emptyOutDir: true,
+  },
   plugins: [
     react(),
     tailwindcss(),
     VitePWA({
-      registerType: 'prompt',
+      registerType: 'autoUpdate',
       includeAssets: ['favicon.svg'],
       manifest: {
         name: 'Помощник автоэлектрика',
@@ -32,6 +37,9 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png,woff2}'],
         navigateFallback: 'index.html',
         cleanupOutdatedCaches: true,
+        // Новый SW активируется сразу, не дожидаясь закрытия вкладок.
+        skipWaiting: true,
+        clientsClaim: true,
       },
       devOptions: { enabled: false },
     }),

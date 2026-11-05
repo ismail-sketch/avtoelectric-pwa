@@ -7,6 +7,7 @@ import { downloadBlob, exportBackup, importBackup } from '../data/backup'
 import { saveTree } from '../data/treeRepo'
 import { validateTree } from '../domain/treeEngine'
 import { Button, Card, Screen, TopBar } from '../ui/kit'
+import { APP_VERSION } from '../version'
 
 export function SettingsScreen() {
   const navigate = useNavigate()
@@ -171,9 +172,34 @@ export function SettingsScreen() {
         </Card>
       </section>
 
-      <p className="text-xs leading-relaxed text-muted">
-        Данные лежат только на этом устройстве. Чтобы перенести на другой телефон — экспорт и импорт.
+      <p className="mt-6 text-center text-xs leading-relaxed text-muted">
+        Версия {APP_VERSION} · данные лежат только на этом устройстве
       </p>
+
+      <div className="mt-2 flex flex-col gap-2">
+        <button
+          className="w-full text-center text-xs text-accent"
+          onClick={() => {
+            window.dispatchEvent(new Event('avtoelectric:check-update'))
+            setTimeout(() => window.location.reload(), 1500)
+          }}
+        >
+          Проверить обновление
+        </button>
+        <button
+          className="w-full text-center text-xs text-muted"
+          onClick={async () => {
+            if (!confirm('Сбросить кэш приложения? Журнал, машины и фото останутся на месте.')) return
+            const regs = await navigator.serviceWorker.getRegistrations()
+            await Promise.all(regs.map((r) => r.unregister()))
+            const keys = await caches.keys()
+            await Promise.all(keys.map((k) => caches.delete(k)))
+            window.location.reload()
+          }}
+        >
+          Сбросить кэш (журнал не пострадает)
+        </button>
+      </div>
     </Screen>
   )
 }
