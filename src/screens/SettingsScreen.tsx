@@ -179,10 +179,7 @@ export function SettingsScreen() {
       <div className="mt-2 flex flex-col gap-2">
         <button
           className="w-full text-center text-xs text-accent"
-          onClick={() => {
-            window.dispatchEvent(new Event('avtoelectric:check-update'))
-            setTimeout(() => window.location.reload(), 1500)
-          }}
+          onClick={() => window.dispatchEvent(new Event('avtoelectric:check-update'))}
         >
           Проверить обновление
         </button>

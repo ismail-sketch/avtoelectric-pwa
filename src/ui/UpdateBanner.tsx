@@ -1,98 +1,92 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
 import { APP_VERSION } from '../version'
+import { checkForUpdate } from './swUpdate'
 
 /**
  * Обновления.
  *
- * Раньше был режим "prompt": новый service worker вставал в ожидание,
- * а кнопка делала просто location.reload(). Старый SW продолжал отдавать
- * старый index.html из кэша — плашка появлялась снова. Замкнутый круг.
- *
- * Теперь SW активируется сам (skipWaiting + clientsClaim), а страница
- * перезагружается по controllerchange. Данные не теряются: журнал в
- * IndexedDB, текущее прохождение — в localStorage.
+ * SW активируется сам (skipWaiting + clientsClaim), Workbox вызывает
+ * onNeedReload перед перезагрузкой. Флаг в sessionStorage ставим без версии:
+ * перезагрузка идёт уже в новой сборке, и APP_VERSION там новый.
  */
-export function UpdateBanner() {
-  const [offlineReady, setOfflineReady] = useState(false)
-  const [updated, setUpdated] = useState(() => sessionStorage.getItem('avtoelectric-updated') === APP_VERSION)
-  const hadController = useRef(false)
 
-  const { updateServiceWorker } = useRegisterSW({
+type Notice = 'updated' | 'offline' | 'none' | 'error'
+
+export function UpdateBanner() {
+  const [notice, setNotice] = useState<Notice | null>(() =>
+    sessionStorage.getItem('avtoelectric-updated') === '1' ? 'updated' : null,
+  )
+
+  useRegisterSW({
     onRegisteredSW(_url, registration) {
       if (!registration) return
       const check = () => registration.update().catch(() => {})
+      // Браузер сам проверяет обновление редко (до 24 ч).
+      // Проверяем при каждом запуске, при возврате в фокус и раз в 5 минут.
+      setTimeout(check, 1500)
       document.addEventListener('visibilitychange', () => {
         if (document.visibilityState === 'visible') check()
       })
       setInterval(check, 5 * 60_000)
     },
+    onNeedReload() {
+      // Флаг переживёт перезагрузку, версию подставим уже из новой сборки.
+      // Workbox при наличии onNeedReload сам не перезагружает — делаем это здесь.
+      sessionStorage.setItem('avtoelectric-updated', '1')
+      window.location.reload()
+    },
     onOfflineReady() {
-      setOfflineReady(true)
+      setNotice('offline')
     },
   })
 
-  // Запоминаем, был ли SW до этого: при первой установке перезагружаться не нужно.
   useEffect(() => {
-    hadController.current = Boolean(navigator.serviceWorker?.controller)
-  }, [])
-
-  useEffect(() => {
-    const sw = navigator.serviceWorker
-    if (!sw) return
-    let reloading = false
-
-    const onControllerChange = () => {
-      if (reloading) return
-      if (!hadController.current) {
-        // Первая установка: новый SW просто взял управление, перезагрузка не нужна.
-        hadController.current = true
-        return
-      }
-      reloading = true
-      sessionStorage.setItem('avtoelectric-updated', APP_VERSION)
-      window.location.reload()
-    }
-
-    sw.addEventListener('controllerchange', onControllerChange)
-    return () => sw.removeEventListener('controllerchange', onControllerChange)
-  }, [])
-
-  useEffect(() => {
-    if (!updated) return
+    if (notice !== 'updated') return
     sessionStorage.removeItem('avtoelectric-updated')
-    const t = setTimeout(() => setUpdated(false), 4000)
-    return () => clearTimeout(t)
-  }, [updated])
+  }, [notice])
 
   useEffect(() => {
-    if (!offlineReady) return
-    const t = setTimeout(() => setOfflineReady(false), 4000)
+    if (!notice) return
+    const t = setTimeout(() => setNotice(null), 4000)
     return () => clearTimeout(t)
-  }, [offlineReady])
+  }, [notice])
 
   // Ручная проверка из настроек.
   useEffect(() => {
-    const handler = () => updateServiceWorker(true)
+    const handler = async () => {
+      const result = await checkForUpdate()
+      if (result === 'none') setNotice('none')
+      else if (result === 'error' || result === 'unsupported') setNotice('error')
+      // 'updated' — страница перезагрузится сама через onNeedReload.
+    }
     window.addEventListener('avtoelectric:check-update', handler)
     return () => window.removeEventListener('avtoelectric:check-update', handler)
-  }, [updateServiceWorker])
+  }, [])
 
-  if (updated) {
-    return (
-      <div className="fixed inset-x-3 bottom-20 z-50 rounded-xl border border-ok/40 bg-surface px-4 py-3 text-center text-sm text-ok no-print">
-        Обновлено до версии {APP_VERSION}
-      </div>
-    )
-  }
+  if (!notice) return null
 
-  if (offlineReady) {
-    return (
-      <div className="fixed inset-x-3 bottom-20 z-50 rounded-xl border border-ok/40 bg-surface px-4 py-3 text-center text-sm text-ok no-print">
-        Готово к работе офлайн
-      </div>
-    )
-  }
+  const text =
+    notice === 'updated'
+      ? `Обновлено до версии ${APP_VERSION}`
+      : notice === 'offline'
+        ? 'Готово к работе офлайн'
+        : notice === 'none'
+          ? 'Уже последняя версия'
+          : 'Не удалось проверить обновление'
 
-  return null
+  const tone =
+    notice === 'none'
+      ? 'border-line text-muted'
+      : notice === 'error'
+        ? 'border-warn/40 text-warn'
+        : 'border-ok/40 text-ok'
+
+  return (
+    <div
+      className={`fixed inset-x-3 bottom-20 z-50 rounded-xl border bg-surface px-4 py-3 text-center text-sm no-print ${tone}`}
+    >
+      {text}
+    </div>
+  )
 }
