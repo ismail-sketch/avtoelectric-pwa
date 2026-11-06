@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams } from 'react-router-dom'
 import { useLiveQuery } from 'dexie-react-hooks'
 import { getTreeBySlug, ensureSeed } from '../data/treeRepo'
 import { addGap, createWork } from '../data/userRepo'
 import { db } from '../data/db'
+import { withTimeout } from '../data/withTimeout'
 import { check, getNode, pick, start } from '../domain/treeEngine'
 import type { RunState, TreeDoc, Verdict } from '../domain/types'
 import { useRun } from '../state/run'
@@ -91,14 +92,19 @@ export function RunScreen() {
     setRun(check(tree, run, v))
   }
 
-  function onUnknownNote(text?: string) {
-    if (!tree || !run || !node) return
-    addGap({
-      treeSlug: tree.slug,
-      nodeId: node.id,
-      question: node.text,
-      note: text,
-    })
+  async function onUnknownNote(text?: string) {
+    if (!tree || !run || !node) throw new Error('Шаг недоступен. Перезагрузи приложение.')
+    // Ждём запись: иначе UI пишет «Записал», даже если база не ответила.
+    await withTimeout(
+      addGap({
+        treeSlug: tree.slug,
+        nodeId: node.id,
+        question: node.text,
+        note: text,
+      }),
+      15000,
+      'База не отвечает. Дырка не записана — перезагрузи приложение.',
+    )
   }
 
   function onBack() {
@@ -236,7 +242,7 @@ export function RunScreen() {
               ✗ Не норма
             </Button>
           </div>
-          <UnknownButton onNote={onUnknownNote} />
+          <UnknownButton key={node.id} onNote={onUnknownNote} />
         </div>
       )}
 
@@ -307,15 +313,19 @@ function Row({ k, v, accent }: { k: string; v: string; accent?: boolean }) {
   )
 }
 
-function UnknownButton({ onNote }: { onNote: (text?: string) => void }) {
+function UnknownButton({ onNote }: { onNote: (text?: string) => Promise<void> }) {
   const [open, setOpen] = useState(false)
   const [text, setText] = useState('')
-  const [saved, setSaved] = useState(false)
+  const [status, setStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle')
+  const [error, setError] = useState('')
 
-  if (saved) {
+  if (status === 'saved') {
     return (
       <div className="rounded-xl border border-warn/40 bg-warn/10 px-3 py-2 text-sm text-warn">
-        Записал в «дырки» — допишешь дома
+        Записал в «дырки» — допишешь дома.{' '}
+        <Link to="/gaps" className="underline">
+          Открыть список
+        </Link>
       </div>
     )
   }
@@ -328,6 +338,18 @@ function UnknownButton({ onNote }: { onNote: (text?: string) => void }) {
     )
   }
 
+  async function save() {
+    setStatus('saving')
+    setError('')
+    try {
+      await onNote(text)
+      setStatus('saved')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Не удалось записать')
+      setStatus('error')
+    }
+  }
+
   return (
     <div className="flex flex-col gap-2 rounded-xl border border-line bg-surface-2 p-3">
       <textarea
@@ -336,14 +358,9 @@ function UnknownButton({ onNote }: { onNote: (text?: string) => void }) {
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
-      <Button
-        variant="warn"
-        onClick={() => {
-          onNote(text)
-          setSaved(true)
-        }}
-      >
-        Записать
+      {status === 'error' && <p className="text-sm text-bad">{error}</p>}
+      <Button variant="warn" onClick={save} disabled={status === 'saving'}>
+        {status === 'saving' ? 'Записываю…' : 'Записать'}
       </Button>
     </div>
   )

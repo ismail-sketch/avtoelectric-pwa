@@ -8,6 +8,7 @@ import { restoreSeedTree, saveTree } from '../data/treeRepo'
 import { withTimeout } from '../data/withTimeout'
 import { validateTree } from '../domain/treeEngine'
 import { Button, Card, Screen, TopBar } from '../ui/kit'
+import { resetAppCache } from '../ui/swUpdate'
 import { APP_VERSION } from '../version'
 
 export function SettingsScreen() {
@@ -16,6 +17,7 @@ export function SettingsScreen() {
   const [message, setMessage] = useState<{ kind: 'ok' | 'bad'; text: string } | null>(null)
   const [importing, setImporting] = useState(false)
   const [checking, setChecking] = useState(false)
+  const [resetting, setResetting] = useState(false)
   const [persisted, setPersisted] = useState<boolean | null>(null)
 
   useEffect(() => {
@@ -259,17 +261,43 @@ export function SettingsScreen() {
           Проверить обновление
         </button>
         <button
-          className="w-full text-center text-xs text-muted"
+          className="w-full text-center text-xs text-muted disabled:opacity-40"
+          disabled={resetting}
           onClick={async () => {
-            if (!confirm('Сбросить кэш приложения? Журнал, машины и фото останутся на месте.')) return
-            const regs = await navigator.serviceWorker.getRegistrations()
-            await Promise.all(regs.map((r) => r.unregister()))
-            const keys = await caches.keys()
-            await Promise.all(keys.map((k) => caches.delete(k)))
-            window.location.reload()
+            if (
+              !confirm(
+                'Сбросить кэш оболочки? Журнал, машины, фото и деревья останутся. Нужен интернет.',
+              )
+            )
+              return
+            setResetting(true)
+            try {
+              const result = await resetAppCache()
+              if (result === 'offline') {
+                flash(
+                  'bad',
+                  'Нет интернета. Сброс не делаю: приложение осталось бы без офлайн-версии.',
+                )
+                return
+              }
+              if (result === 'error') {
+                flash(
+                  'bad',
+                  'Не удалось переустановить оболочку. Данные целы — закрой приложение и открой заново по ссылке.',
+                )
+                return
+              }
+              // Обходим и HTTP-кэш: иначе после перезагрузки может прийти
+              // старый index.html со ссылками на уже удалённые файлы.
+              const url = new URL(window.location.href)
+              url.searchParams.set('fresh', Date.now().toString())
+              window.location.replace(url.toString())
+            } finally {
+              setResetting(false)
+            }
           }}
         >
-          Сбросить кэш (журнал не пострадает)
+          {resetting ? 'Переустанавливаю…' : 'Сбросить кэш (журнал не пострадает)'}
         </button>
       </div>
     </Screen>

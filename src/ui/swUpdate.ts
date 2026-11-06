@@ -50,3 +50,27 @@ export async function checkForUpdate(timeoutMs = 20000): Promise<UpdateCheck> {
   sw.removeEventListener('controllerchange', onChange)
   return 'error'
 }
+
+export type ResetResult = 'ok' | 'offline' | 'error'
+
+/**
+ * Сброс оболочки: снять service worker и удалить кэши. Перезагрузку делает
+ * вызывающий код — обязательно с обходом HTTP-кэша (`?fresh=`), иначе
+ * GitHub Pages может отдать старый index.html со ссылками на удалённые файлы.
+ * Приложение после перезагрузки само поставит свежий SW и прогреет кэш.
+ */
+export async function resetAppCache(): Promise<ResetResult> {
+  if (!navigator.onLine) return 'offline'
+
+  try {
+    if ('serviceWorker' in navigator) {
+      const regs = await navigator.serviceWorker.getRegistrations()
+      await Promise.all(regs.map((r) => r.unregister()))
+    }
+    const keys = await caches.keys()
+    await Promise.all(keys.map((k) => caches.delete(k)))
+    return 'ok'
+  } catch {
+    return 'error'
+  }
+}
