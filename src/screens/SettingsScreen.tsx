@@ -4,7 +4,8 @@ import { useLiveQuery } from 'dexie-react-hooks'
 import { db, requestPersistence } from '../data/db'
 import { CSV_TEMPLATE, decodeCsv, treeFromCsv } from '../data/treeImport'
 import { downloadBlob, exportBackup, importBackup } from '../data/backup'
-import { saveTree } from '../data/treeRepo'
+import { restoreSeedTree, saveTree } from '../data/treeRepo'
+import { withTimeout } from '../data/withTimeout'
 import { validateTree } from '../domain/treeEngine'
 import { Button, Card, Screen, TopBar } from '../ui/kit'
 import { APP_VERSION } from '../version'
@@ -14,6 +15,7 @@ export function SettingsScreen() {
   const trees = useLiveQuery(async () => (await db.trees.toArray()).filter((t) => !t.deletedAt), [])
   const [message, setMessage] = useState<{ kind: 'ok' | 'bad'; text: string } | null>(null)
   const [importing, setImporting] = useState(false)
+  const [checking, setChecking] = useState(false)
   const [persisted, setPersisted] = useState<boolean | null>(null)
 
   useEffect(() => {
@@ -27,11 +29,31 @@ export function SettingsScreen() {
   async function onCsv(file: File) {
     setImporting(true)
     try {
-      const csv = decodeCsv(await file.arrayBuffer())
-      const title = file.name.replace(/\.csv$/i, '')
-      const slug = title.toLowerCase().replace(/[^a-z0-9а-я]+/gi, '-')
+      const csv = decodeCsv(
+        await withTimeout(file.arrayBuffer(), 20000, 'Не удалось прочитать файл. Выбери его заново.'),
+      )
+      const title = file.name.replace(/\.csv$/i, '').trim() || 'Дерево'
+      const slug =
+        title
+          .toLowerCase()
+          .replace(/[^a-z0-9а-я]+/gi, '-')
+          .replace(/^-+|-+$/g, '') || `tree-${Date.now()}`
       const doc = treeFromCsv(csv, { slug, title })
-      await saveTree(doc)
+
+      // Не перезаписываем молча: у дерева может быть то же имя файла.
+      const existing = await withTimeout(
+        db.trees.where('slug').equals(slug).first(),
+        15000,
+        'База не отвечает. Перезагрузи приложение.',
+      )
+      if (existing && !existing.deletedAt) {
+        const replace = confirm(
+          `Дерево «${existing.title}» уже есть. Заменить его новым из файла «${file.name}»?`,
+        )
+        if (!replace) return
+      }
+
+      await withTimeout(saveTree(doc), 20000, 'Не удалось сохранить дерево. Перезагрузи приложение.')
       flash('ok', `Дерево «${title}» импортировано: ${Object.keys(doc.nodes).length} узлов`)
     } catch (e) {
       flash('bad', e instanceof Error ? e.message : 'Ошибка импорта')
@@ -41,9 +63,50 @@ export function SettingsScreen() {
   }
 
   async function checkAll() {
-    const rows = await db.trees.toArray()
-    const all = rows.filter((r) => !r.deletedAt).flatMap((r) => validateTree(r.doc).map((e) => `${r.title}: ${e}`))
-    flash(all.length ? 'bad' : 'ok', all.length ? all.join('\n') : 'Все деревья целые')
+    setChecking(true)
+    try {
+      const rows = await withTimeout(
+        db.trees.toArray(),
+        15000,
+        'База не отвечает. Перезагрузи приложение.',
+      )
+      const all = rows
+        .filter((r) => !r.deletedAt)
+        .flatMap((r) => {
+          try {
+            return validateTree(r.doc).map((e) => `${r.title}: ${e}`)
+          } catch (e) {
+            return [`${r.title}: повреждённая запись (${e instanceof Error ? e.message : 'ошибка'})`]
+          }
+        })
+      flash(all.length ? 'bad' : 'ok', all.length ? all.join('\n') : 'Все деревья целые')
+    } catch (e) {
+      flash('bad', e instanceof Error ? e.message : 'Не удалось проверить деревья')
+    } finally {
+      setChecking(false)
+    }
+  }
+
+  async function checkDb() {
+    try {
+      const [trees, cars, works, photos] = await withTimeout(
+        Promise.all([db.trees.count(), db.cars.count(), db.works.count(), db.photos.count()]),
+        10000,
+        'База не отвечает. Перезагрузи приложение.',
+      )
+      flash('ok', `База: деревьев ${trees}, машин ${cars}, работ ${works}, фото ${photos}`)
+    } catch (e) {
+      flash('bad', e instanceof Error ? e.message : 'Не удалось прочитать базу')
+    }
+  }
+
+  async function restoreBuiltIn() {
+    try {
+      await withTimeout(restoreSeedTree(), 15000, 'База не отвечает. Перезагрузи приложение.')
+      flash('ok', 'Встроенное дерево «Не заводится» восстановлено')
+    } catch (e) {
+      flash('bad', e instanceof Error ? e.message : 'Не удалось восстановить дерево')
+    }
   }
 
   return (
@@ -94,17 +157,26 @@ export function SettingsScreen() {
               type="file"
               accept=".csv,text/csv"
               className="hidden"
-              onChange={(e) => {
+              onChange={async (e) => {
                 const f = e.target.files?.[0]
-                if (f) onCsv(f)
+                if (!f) return
+                // Читаем файл, пока он ещё в поле: на Android после очистки
+                // input чтение может не завершиться.
+                await onCsv(f)
                 e.target.value = ''
               }}
             />
           </label>
-          <Button variant="ghost" className="flex-1" onClick={checkAll}>
-            Проверить
+          <Button variant="ghost" className="flex-1" onClick={checkAll} disabled={checking}>
+            {checking ? 'Проверяю…' : 'Проверить'}
           </Button>
         </div>
+        <button
+          className="mt-2 w-full text-center text-xs text-muted"
+          onClick={restoreBuiltIn}
+        >
+          Вернуть встроенное дерево «Не заводится»
+        </button>
         <button
           className="mt-2 w-full text-center text-xs text-accent"
           onClick={() => downloadBlob(new Blob([CSV_TEMPLATE], { type: 'text/csv;charset=utf-8' }), 'shablon-dereva.csv')}
@@ -138,13 +210,13 @@ export function SettingsScreen() {
               className="hidden"
               onChange={async (e) => {
                 const f = e.target.files?.[0]
-                e.target.value = ''
                 if (!f) return
                 try {
                   flash('ok', await importBackup(f))
                 } catch (err) {
                   flash('bad', err instanceof Error ? err.message : 'Ошибка импорта')
                 }
+                e.target.value = ''
               }}
             />
           </label>
@@ -169,6 +241,9 @@ export function SettingsScreen() {
               Запросить защиту
             </Button>
           )}
+          <Button variant="ghost" className="mt-2 w-full text-sm" onClick={checkDb}>
+            Проверить базу
+          </Button>
         </Card>
       </section>
 

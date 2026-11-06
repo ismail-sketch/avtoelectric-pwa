@@ -1,12 +1,14 @@
-import { db } from './db'
+import { db, type TreeRow } from './db'
 import type { Car, Gap, Photo, Work } from '../domain/types'
 
 // Экспорт/импорт. Пользовательские данные — святое, бэкап обязателен.
+// Деревья тоже кладём в копию: свои деревья — это результат работы, их нельзя терять.
 
 interface Dump {
   format: 'avtoelectric-backup'
   version: 1
   exportedAt: string
+  trees?: TreeRow[]
   cars: Car[]
   works: Work[]
   gaps: Gap[]
@@ -15,7 +17,8 @@ interface Dump {
 }
 
 export async function exportBackup(): Promise<Blob> {
-  const [cars, works, gaps, photos, settings] = await Promise.all([
+  const [trees, cars, works, gaps, photos, settings] = await Promise.all([
+    db.trees.toArray(),
     db.cars.toArray(),
     db.works.toArray(),
     db.gaps.toArray(),
@@ -27,6 +30,7 @@ export async function exportBackup(): Promise<Blob> {
     format: 'avtoelectric-backup',
     version: 1,
     exportedAt: new Date().toISOString(),
+    trees,
     cars,
     works,
     gaps,
@@ -55,7 +59,8 @@ export async function importBackup(file: File): Promise<string> {
   if (dump.format !== 'avtoelectric-backup') throw new Error('Это не файл резервной копии')
 
   // Режим "добавить": существующие записи по id перезаписываются.
-  await db.transaction('rw', [db.cars, db.works, db.gaps, db.photos, db.settings], async () => {
+  await db.transaction('rw', [db.trees, db.cars, db.works, db.gaps, db.photos, db.settings], async () => {
+    await db.trees.bulkPut(dump.trees ?? [])
     await db.cars.bulkPut(dump.cars ?? [])
     await db.works.bulkPut(dump.works ?? [])
     await db.gaps.bulkPut(dump.gaps ?? [])
@@ -67,7 +72,7 @@ export async function importBackup(file: File): Promise<string> {
     await db.settings.bulkPut(dump.settings ?? [])
   })
 
-  return `Импортировано: ${dump.cars?.length ?? 0} машин, ${dump.works?.length ?? 0} работ, ${dump.photos?.length ?? 0} фото`
+  return `Импортировано: ${dump.trees?.length ?? 0} деревьев, ${dump.cars?.length ?? 0} машин, ${dump.works?.length ?? 0} работ, ${dump.photos?.length ?? 0} фото`
 }
 
 function blobToDataUrl(blob: Blob): Promise<string> {

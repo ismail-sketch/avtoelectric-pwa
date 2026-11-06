@@ -5,9 +5,29 @@ import type { TreeDoc } from '../domain/types'
 // Репозиторий контента. UI не знает про Dexie — только про эти функции.
 
 export async function ensureSeed(): Promise<void> {
-  const count = await db.trees.count()
-  if (count > 0) return
-  await saveTree(noStartTree)
+  // Считаем только видимые деревья: если все удалены, встроенное должно вернуться.
+  const visible = await db.trees.filter((r) => !r.deletedAt).count()
+  if (visible > 0) return
+  await restoreSeedTree()
+}
+
+/** Вернуть встроенное дерево «Не заводится», даже если его удалили. */
+export async function restoreSeedTree(): Promise<void> {
+  const existing = await db.trees.where('slug').equals(noStartTree.slug).first()
+  if (existing) {
+    await db.trees.where('id').equals(existing.id).modify((row) => {
+      delete row.deletedAt
+    })
+    return
+  }
+  await db.trees.put({
+    id: noStartTree.id,
+    slug: noStartTree.slug,
+    title: noStartTree.title,
+    version: noStartTree.version,
+    doc: noStartTree,
+    updatedAt: noStartTree.updatedAt,
+  })
 }
 
 export async function listTrees(): Promise<TreeRow[]> {

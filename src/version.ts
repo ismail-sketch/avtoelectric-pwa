@@ -1,2 +1,2 @@
 /** Версия приложения. Обновляется вручную при заметных изменениях. */
-export const APP_VERSION = '1.3'
+export const APP_VERSION = '1.4'

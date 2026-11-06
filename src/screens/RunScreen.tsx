@@ -33,22 +33,36 @@ export function RunScreen() {
 
   useEffect(() => {
     if (!slug) return
-    getTreeBySlug(slug).then(async (t) => {
-      if (!t) {
+    const applyTree = (t: TreeDoc) => {
+      setTree(t)
+      // Состояние прохождения могло остаться от прошлой версии дерева:
+      // id сохраняется при импорте, а узлы меняются. Если currentId исчез —
+      // начинаем заново, иначе экран будет пустым.
+      const valid = run != null && run.treeId === t.id && Boolean(t.nodes[run.currentId])
+      if (!valid) setRun(start(t))
+    }
+
+    getTreeBySlug(slug)
+      .then(async (t) => {
+        if (t) {
+          applyTree(t)
+          return
+        }
         // Первый запуск: сид мог ещё не записаться — пробуем ещё раз.
-        await ensureSeed()
+        try {
+          await ensureSeed()
+        } catch {
+          setError('База не отвечает. Перезагрузи приложение.')
+          return
+        }
         const retry = await getTreeBySlug(slug)
         if (!retry) {
           setError('Дерево не найдено')
           return
         }
-        setTree(retry)
-        if (!run || run.treeId !== retry.id) setRun(start(retry))
-        return
-      }
-      setTree(t)
-      if (!run || run.treeId !== t.id) setRun(start(t))
-    })
+        applyTree(retry)
+      })
+      .catch(() => setError('Не удалось загрузить дерево. Перезагрузи приложение.'))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [slug])
 
@@ -135,7 +149,15 @@ export function RunScreen() {
   if (!tree || !run || !node) {
     return (
       <Screen>
-        <TopBar title="…" onBack={() => navigate(-1)} />
+        <TopBar title={tree?.title ?? '…'} onBack={() => navigate('/diagnose')} />
+        <Card className="flex flex-col gap-3">
+          <p className="text-sm text-muted">
+            {tree ? 'Не удалось открыть текущий шаг.' : 'Загружаю дерево…'}
+          </p>
+          {tree && (
+            <Button onClick={onRestart}>Начать заново</Button>
+          )}
+        </Card>
       </Screen>
     )
   }
